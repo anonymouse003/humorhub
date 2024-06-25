@@ -1,93 +1,139 @@
-//
-//  ContentView.swift
-//  jokes2
-//
-//  Created by Rahul Verma on 12/06/23.
-//
 import SwiftUI
 
-enum JokeError: Error {
+enum JokeError: Error, LocalizedError {
     case urlNotCorrect
     case invalidResponse
     case jsonNotParsable
     case unexpectedError
+    
+    var errorDescription: String? {
+        switch self {
+        case .urlNotCorrect:
+            return "The URL provided is incorrect."
+        case .invalidResponse:
+            return "The response from the server was invalid."
+        case .jsonNotParsable:
+            return "The JSON data could not be parsed."
+        case .unexpectedError:
+            return "An unexpected error occurred."
+        }
+    }
 }
 
-struct jokeInstance: Codable {
+struct JokeInstance: Codable, Identifiable {
     let id: String
     let joke: String
     let status: Int
 }
 
 struct ContentView: View {
-    @State var joke: jokeInstance?
-    @State var isCopied: Bool = false
-    var url: String = "https://icanhazdadjoke.com/"
+    @State private var joke: JokeInstance?
+    @State private var isCopied = false
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var themeIndex = 0
+    private let url = "https://icanhazdadjoke.com/"
+    
+    private let themes: [Gradient] = [
+        Gradient(colors: [.purple, .blue]),
+        Gradient(colors: [.orange, .pink]),
+        Gradient(colors: [.green, .yellow]),
+        Gradient(colors: [.red, .purple])
+    ]
     
     var body: some View {
         ZStack {
-            LinearGradient(gradient: Gradient(colors: [.blue, .white]), startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(gradient: themes[themeIndex], startPoint: .topLeading, endPoint: .bottomTrailing)
                 .edgesIgnoringSafeArea(.all)
             
-            VStack {
-                RoundedRectangle(cornerRadius: 10)
-                    .foregroundColor(.black)
-                    .background(
-                        LinearGradient(gradient: Gradient(colors: [.black, .gray]), startPoint: .topLeading, endPoint: .bottomTrailing)
-                    )
-                    .frame(width: 350, height: 300)
-                    .shadow(radius: 10)
-                    .overlay(
-                        Text(joke?.joke ?? "No jokes yet")
-                            .fontWeight(.bold)
-                            .font(.system(size: 30))
-                            .foregroundColor(.white)
-                            .multilineTextAlignment(.center)
-                            .padding()
-                    )
-                    .animation(.easeInOut)
-                    .gesture(
-                        DragGesture()
-                            .onChanged { _ in }
-                            .onEnded { value in
-                                if value.translation.width < 0 {
-                                    fetchNewJoke()
-                                }
+            VStack(spacing: 20) {
+                HeaderView(changeTheme: changeTheme)
+                
+                if isLoading {
+                    ProgressView("Fetching a joke...")
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .foregroundColor(.white)
+                        .padding()
+                } else if let joke = joke {
+                    JokeView(joke: joke.joke)
+                        .onTapGesture {
+                            withAnimation(.easeInOut) {
+                                fetchNewJoke()
                             }
-                    )
+                        }
+                } else {
+                    PlaceholderView(message: errorMessage ?? "Tap to fetch a joke!")
+                        .onTapGesture {
+                            withAnimation(.easeInOut) {
+                                fetchNewJoke()
+                            }
+                        }
+                }
+                
+                Spacer()
                 
                 Button(action: {
                     copyJoke()
                 }) {
                     Text(isCopied ? "Copied!" : "Copy")
-                        .foregroundColor(.black)
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
                         .padding()
-                        .background(Color.white)
+                        .background(Color.black.opacity(0.8))
                         .cornerRadius(10)
-                        .padding(.top, 10)
+                        .shadow(radius: 10)
+                        .padding(.bottom, 20)
+                }
+                .scaleEffect(isCopied ? 1.2 : 1)
+                .animation(.easeInOut(duration: 0.3), value: isCopied)
+                
+                if let _ = errorMessage {
+                    Button(action: {
+                        withAnimation(.easeInOut) {
+                            fetchNewJoke()
+                        }
+                    }) {
+                        Text("Retry")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.red.opacity(0.8))
+                            .cornerRadius(10)
+                            .shadow(radius: 10)
+                            .padding(.bottom, 20)
+                    }
                 }
             }
+            .padding()
         }
         .onAppear {
             fetchNewJoke()
         }
     }
     
-    func fetchNewJoke() {
+    private func fetchNewJoke() {
+        isLoading = true
+        errorMessage = nil
+        
         getJoke(urlString: url) { result in
-            switch result {
-            case .success(let joke):
-                self.joke = joke  // Handle the retrieved joke
-            case .failure(let error):
-                print(error)  // Handle the error
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let joke):
+                    self.joke = joke
+                case .failure(let error):
+                    self.joke = nil
+                    self.errorMessage = error.localizedDescription
+                }
             }
         }
     }
     
-    func getJoke(urlString: String, completion: @escaping (Result<jokeInstance, Error>) -> Void) {
+    private func getJoke(urlString: String, completion: @escaping (Result<JokeInstance, Error>) -> Void) {
         guard let url = URL(string: urlString) else {
-            let error = NSError(domain: "Invalid URL", code: 0, userInfo: nil)
-            completion(.failure(error))
+            completion(.failure(JokeError.urlNotCorrect))
             return
         }
         
@@ -95,33 +141,118 @@ struct ContentView: View {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         
-        URLSession.shared.dataTask(with: request) { (data, response, error) in
+        URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
                 completion(.failure(error))
                 return
             }
             
-            if let data = data {
-                do {
-                    let res = try JSONDecoder().decode(jokeInstance.self, from: data)
-                    completion(.success(res))
-                } catch {
-                    completion(.failure(error))
-                }
-            } else {
-                let error = NSError(domain: "No data received", code: 0, userInfo: nil)
-                completion(.failure(error))
+            guard let data = data else {
+                completion(.failure(JokeError.invalidResponse))
+                return
+            }
+            
+            do {
+                let joke = try JSONDecoder().decode(JokeInstance.self, from: data)
+                completion(.success(joke))
+            } catch {
+                completion(.failure(JokeError.jsonNotParsable))
             }
         }.resume()
     }
     
-    func copyJoke() {
+    private func copyJoke() {
         guard let jokeText = joke?.joke else {
             return
         }
         
-        let activityViewController = UIActivityViewController(activityItems: [jokeText], applicationActivities: nil)
-        UIApplication.shared.windows.first?.rootViewController?.present(activityViewController, animated: true, completion: nil)
+        UIPasteboard.general.string = jokeText
+        isCopied = true
+        
+        // Haptic feedback
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            isCopied = false
+        }
+    }
+    
+    private func changeTheme() {
+        themeIndex = (themeIndex + 1) % themes.count
+    }
+}
+
+struct HeaderView: View {
+    var changeTheme: () -> Void
+    
+    var body: some View {
+        HStack {
+            Text("Random Dad Joke")
+                .font(.largeTitle)
+                .fontWeight(.heavy)
+                .foregroundColor(.white)
+                .padding(.top, 20)
+            Spacer()
+            Button(action: {
+                withAnimation(.easeInOut) {
+                    changeTheme()
+                }
+            }) {
+                Image(systemName: "paintpalette")
+                    .foregroundColor(.white)
+                    .padding(10)
+                    .background(Color.black.opacity(0.6))
+                    .clipShape(Circle())
+                    .shadow(radius: 10)
+            }
+            .padding(.top, 20)
+            .padding(.trailing, 20)
+        }
+    }
+}
+
+struct JokeView: View {
+    let joke: String
+    
+    var body: some View {
+        Text(joke)
+            .fontWeight(.semibold)
+            .font(.system(size: 22))
+            .foregroundColor(.white)
+            .multilineTextAlignment(.center)
+            .padding()
+            .frame(maxWidth: .infinity, minHeight: 200)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .foregroundColor(.black)
+                    .opacity(0.8)
+                    .shadow(radius: 10)
+            )
+            .padding(.horizontal, 20)
+            .transition(.opacity)
+    }
+}
+
+struct PlaceholderView: View {
+    let message: String
+    
+    var body: some View {
+        Text(message)
+            .fontWeight(.semibold)
+            .font(.system(size: 22))
+            .foregroundColor(.white)
+            .multilineTextAlignment(.center)
+            .padding()
+            .frame(maxWidth: .infinity, minHeight: 200)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .foregroundColor(.gray)
+                    .opacity(0.8)
+                    .shadow(radius: 10)
+            )
+            .padding(.horizontal, 20)
+            .transition(.opacity)
     }
 }
 
@@ -130,6 +261,4 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
     }
 }
-
-
 
